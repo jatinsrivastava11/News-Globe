@@ -1,0 +1,3 @@
+Possible updates:
+    - Use AI or URL mapping for news's which don't have a countries name in them
+    - Right now it only shows one news per country because it updates dictionary everytime it comes across the country code
