@@ -169,18 +169,9 @@
     return out;
   }
 
-  // Split a ring into multiple rings if it crosses the antimeridian (±180°),
-  // shifting points to keep each sub-ring contiguous in longitude.
-  function splitRingAtAntimeridian(ring) {
-    // Detect if ring spans both near -180 and near +180
-    let hasLow = false, hasHigh = false;
-    ring.forEach(c => {
-      if (c[0] < -90) hasLow = true;
-      if (c[0] > 90) hasHigh = true;
-    });
-    if (!(hasLow && hasHigh)) return [ring];
-
-    // Shift points so the ring doesn't wrap: unwrap longitudes relative to previous point
+  // Normalize a ring's longitudes to avoid the antimeridian wrap entirely:
+  // unwrap relative to first point, then shift whole ring to minimize spread.
+  function normalizeRingLongitudes(ring) {
     const unwrapped = [ring[0].slice()];
     for (let i = 1; i < ring.length; i++) {
       let [lon, lat] = ring[i];
@@ -189,14 +180,9 @@
       while (lon - prevLon < -180) lon += 360;
       unwrapped.push([lon, lat]);
     }
-
-    // After unwrapping, shift the whole ring so it's centered within a normal range
-    // (recenter around the mean longitude, then clamp into [-180,180]+offset band)
     const meanLon = unwrapped.reduce((s, c) => s + c[0], 0) / unwrapped.length;
     const offset = Math.round(meanLon / 360) * 360;
-    const shifted = unwrapped.map(c => [c[0] - offset, c[1]]);
-
-    return [shifted];
+    return unwrapped.map(c => [c[0] - offset, c[1]]);
   }
   const hoverGroup = new THREE.Group();
   scene.add(hoverGroup);
@@ -212,17 +198,15 @@
     const shadowRadius = 1.0005;  // shadow stays close to surface
 
     polygons.forEach(rings => {
-      const splitOuterRings = splitRingAtAntimeridian(rings[0]);
+      const normalizedOuter = normalizeRingLongitudes(rings[0]);
+      const outerRing = subdivideRing(normalizedOuter);
+      const holes = [];
+      for (let i = 1; i < rings.length; i++) {
+        holes.push(subdivideRing(normalizeRingLongitudes(rings[i])));
+      }
 
-      splitOuterRings.forEach(baseOuter => {
-        const outerRing = subdivideRing(baseOuter);
-        const holes = [];
-        for (let i = 1; i < rings.length; i++) {
-          holes.push(subdivideRing(rings[i]));
-        }
-
-        // Skip slivers/degenerate rings
-        if (outerRing.length < 3) return;
+      // Skip slivers/degenerate rings
+      if (outerRing.length < 3) return;
 
       const shapePoints = outerRing.map(c => new THREE.Vector2(c[0], c[1]));
       const shape = new THREE.Shape(shapePoints);
@@ -238,8 +222,8 @@
           transparent: true,
           opacity: 0,
           side: THREE.DoubleSide,
-          depthWrite: false,
-          shininess: 30,
+          depthWrite: true,
+          depthTest: true,
           emissive: 0x11ffa0,
           emissiveIntensity: 0
         })
@@ -258,7 +242,8 @@
           transparent: true,
           opacity: 0,
           side: THREE.DoubleSide,
-          depthWrite: false
+          depthWrite: true,
+          depthTest: true
         })
       );
       wallMesh.userData.countryName = name;
@@ -289,7 +274,6 @@
       // Pair the shadow with its top mesh for synced animation
       topMesh.userData.shadowMesh = shadowMesh;
       topMesh.userData.wallMesh = wallMesh;
-      });
     });
   }
 
@@ -363,7 +347,14 @@
     raycaster.setFromCamera(mouse, camera);
     // Only raycast against the top patches (front-facing detection)
     const topMeshes = hoverGroup.children.filter(m => m.userData.role === 'top');
-    const intersects = raycaster.intersectObjects(topMeshes);
+    let intersects = raycaster.intersectObjects(topMeshes);
+    // Keep only hits on the side of the globe facing the camera
+    intersects = intersects.filter(hit => {
+      const worldNormal = hit.face.normal.clone()
+        .applyNormalMatrix(new THREE.Matrix3().getNormalMatrix(hit.object.matrixWorld));
+      const viewDir = camera.position.clone().sub(hit.point).normalize();
+      return worldNormal.dot(viewDir) > 0;
+    });
 
     if (intersects.length > 0) {
       const name = intersects[0].object.userData.countryName;
