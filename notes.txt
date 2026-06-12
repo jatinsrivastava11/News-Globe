@@ -4,3 +4,4 @@ Possible updates:
 
 Notes:
     - Each country is assigned a code to identify with and not just it's name because many countries have several names 
+    - Used claude to vibe-code a 3D interactive Globe
